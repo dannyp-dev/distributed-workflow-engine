@@ -1,0 +1,19 @@
+# Compiled binaries and test artifacts
+bin/
+*.exe
+*.test
+*.out
+coverage.out
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Editor and operating-system files
+.idea/
+.DS_Store
+Thumbs.db
+
+# VS Code settings are intentionally shared, but local overrides are not.
+.vscode/settings.local.json

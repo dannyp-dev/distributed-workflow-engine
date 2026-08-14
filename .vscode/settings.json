@@ -1,0 +1,6 @@
+{
+  "editor.formatOnSave": true,
+  "go.formatTool": "gofmt",
+  "go.testFlags": ["-v"],
+  "files.eol": "\n"
+}
