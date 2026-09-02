@@ -2,6 +2,7 @@
 package main
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
 )
@@ -19,7 +20,23 @@ func jobsHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
+	var input createJobRequest
+
+	decoder := json.NewDecoder(r.Body)
+
+	err := decoder.Decode(&input)
+
+	if err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
 	w.Write([]byte("OK"))
+}
+
+type createJobRequest struct {
+	Type    string         `json:"type"`
+	Payload map[string]any `json:"payload"`
 }
 
 func main() {
