@@ -2,9 +2,14 @@
 package main
 
 import (
+	"crypto/rand"
+	"distributed-workflow-engine/internal/jobs"
+	"encoding/hex"
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
+	"time"
 )
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
@@ -31,7 +36,44 @@ func jobsHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
-	w.Write([]byte("OK"))
+
+	if strings.TrimSpace(input.Type) == "" {
+		http.Error(w, "Job type is required", http.StatusBadRequest)
+		return
+	}
+
+	id, err := newJobID()
+	if err != nil {
+		http.Error(w, "Could not generate job ID", http.StatusInternalServerError)
+		return
+	}
+
+	job := jobs.Job{
+		ID:        id,
+		Type:      strings.TrimSpace(input.Type), // The client will only be allowed to write the data for the TYPE
+		Payload:   input.Payload,                 // and the Payload
+		Status:    jobs.StatusPending,
+		CreatedAt: time.Now().UTC(),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+
+	err = json.NewEncoder(w).Encode(job)
+	if err != nil {
+		log.Printf("could not encode job response: %v", err)
+	}
+}
+
+func newJobID() (string, error) {
+	byteSlice := make([]byte, 16)
+	_, err := rand.Read(byteSlice)
+
+	if err != nil {
+		return "", err
+	}
+
+	return hex.EncodeToString(byteSlice), nil
 }
 
 type createJobRequest struct {

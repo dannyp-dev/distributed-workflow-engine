@@ -1,6 +1,8 @@
 package main
 
 import (
+	"distributed-workflow-engine/internal/jobs"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -70,19 +72,69 @@ func TestJobsHandlerAcceptsValidJSON(t *testing.T) {
 
 	jobsHandler(recorder, req)
 
-	if recorder.Code != http.StatusOK {
+	if recorder.Code != http.StatusCreated {
 		t.Errorf(
 			"expected status %d, got %d",
-			http.StatusOK,
+			http.StatusCreated,
 			recorder.Code,
 		)
 	}
 
-	if recorder.Body.String() != "OK" {
+	if recorder.Header().Get("Content-Type") != "application/json" {
 		t.Errorf(
-			"expected body %q, got %q",
-			"OK",
-			recorder.Body.String(),
+			"expected content type %q, got %q",
+			"application/json",
+			recorder.Header().Get("Content-Type"),
+		)
+	}
+
+	var createdJob jobs.Job
+
+	err := json.NewDecoder(recorder.Body).Decode(&createdJob)
+	if err != nil {
+		t.Fatalf("could not decode response body: %v", err)
+	}
+
+	if createdJob.ID == "" {
+		t.Error("expected generated job ID")
+	}
+
+	if createdJob.Type != "resize_image" {
+		t.Errorf(
+			"expected job type %q, got %q",
+			"resize_image",
+			createdJob.Type,
+		)
+	}
+
+	if createdJob.Status != jobs.StatusPending {
+		t.Errorf(
+			"expected job status %q, got %q",
+			jobs.StatusPending,
+			createdJob.Status,
+		)
+	}
+
+	if createdJob.CreatedAt.IsZero() {
+		t.Error("expected job creation time to be set")
+	}
+}
+
+func TestJobsHandlerRejectsMissingType(t *testing.T) {
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/jobs",
+		strings.NewReader(`{"payload":{"filename":"photo.jpg"}}`),
+	)
+	recorder := httptest.NewRecorder()
+
+	jobsHandler(recorder, req)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Errorf(
+			"expected status %d, got %d",
+			http.StatusBadRequest,
+			recorder.Code,
 		)
 	}
 }
