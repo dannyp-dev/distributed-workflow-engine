@@ -28,6 +28,18 @@ func TestHealthHandlerPOST(t *testing.T) {
 	healthHandler(recorder, req)
 
 	if recorder.Code != http.StatusMethodNotAllowed {
-		t.Errorf("expected stats %d, got %d", http.StatusMethodNotAllowed, recorder.Code)
+		t.Errorf("expected status %d, got %d", http.StatusMethodNotAllowed, recorder.Code)
+	}
+}
+
+
+func TestJobsHandlerRejectsGET(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/jobs", nil)
+	recorder := httptest.NewRecorder()
+
+	jobsHandler(recorder, req)
+
+	if recorder.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected status %d, got %d", http.StatusMethodNotAllowed, recorder.Code)
 	}
 }
