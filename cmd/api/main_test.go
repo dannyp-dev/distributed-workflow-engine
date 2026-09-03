@@ -39,7 +39,8 @@ func TestJobsHandlerRejectsGET(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/jobs", nil)
 	recorder := httptest.NewRecorder()
 
-	jobsHandler(recorder, req)
+	app := newTestAPI()
+	app.jobsHandler(recorder, req)
 
 	if recorder.Code != http.StatusMethodNotAllowed {
 		t.Errorf("expected status %d, got %d", http.StatusMethodNotAllowed, recorder.Code)
@@ -50,7 +51,8 @@ func TestJobsHandlerRejectsInvalidJSON(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/jobs", strings.NewReader(`{"type":`))
 	recorder := httptest.NewRecorder()
 
-	jobsHandler(recorder, req)
+	app := newTestAPI()
+	app.jobsHandler(recorder, req)
 
 	if recorder.Code != http.StatusBadRequest {
 		t.Errorf(
@@ -70,7 +72,8 @@ func TestJobsHandlerAcceptsValidJSON(t *testing.T) {
 }`))
 	recorder := httptest.NewRecorder()
 
-	jobsHandler(recorder, req)
+	app := newTestAPI()
+	app.jobsHandler(recorder, req)
 
 	if recorder.Code != http.StatusCreated {
 		t.Errorf(
@@ -93,6 +96,19 @@ func TestJobsHandlerAcceptsValidJSON(t *testing.T) {
 	err := json.NewDecoder(recorder.Body).Decode(&createdJob)
 	if err != nil {
 		t.Fatalf("could not decode response body: %v", err)
+	}
+
+	storedJob, found := app.store.Get(createdJob.ID)
+	if !found {
+		t.Fatal("expected created job to be saved")
+	}
+
+	if storedJob.ID != createdJob.ID {
+		t.Errorf(
+			"expected stored job ID %q, got %q",
+			createdJob.ID,
+			storedJob.ID,
+		)
 	}
 
 	if createdJob.ID == "" {
@@ -128,7 +144,8 @@ func TestJobsHandlerRejectsMissingType(t *testing.T) {
 	)
 	recorder := httptest.NewRecorder()
 
-	jobsHandler(recorder, req)
+	app := newTestAPI()
+	app.jobsHandler(recorder, req)
 
 	if recorder.Code != http.StatusBadRequest {
 		t.Errorf(
@@ -136,5 +153,11 @@ func TestJobsHandlerRejectsMissingType(t *testing.T) {
 			http.StatusBadRequest,
 			recorder.Code,
 		)
+	}
+}
+
+func newTestAPI() *api {
+	return &api{
+		store: jobs.NewStore(),
 	}
 }

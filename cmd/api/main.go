@@ -20,7 +20,7 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("OK"))
 }
 
-func jobsHandler(w http.ResponseWriter, r *http.Request) {
+func (a *api) jobsHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
@@ -56,6 +56,8 @@ func jobsHandler(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: time.Now().UTC(),
 	}
 
+	a.store.Save(job) // Save the new job in this API instance's shared store.
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 
@@ -81,10 +83,18 @@ type createJobRequest struct {
 	Payload map[string]any `json:"payload"`
 }
 
+type api struct {
+	store *jobs.Store
+}
+
 func main() {
+	app := &api{
+		store: jobs.NewStore(), // Give this API instance one shared job store
+	}
+
 	// Makes it so that healthHandler handles requests whose path is /health
 	http.HandleFunc("/health", healthHandler)
-	http.HandleFunc("/jobs", jobsHandler)
+	http.HandleFunc("/jobs", app.jobsHandler)
 	log.Println("Server starting on port :8080...")
 
 	err := http.ListenAndServe(":8080", nil)
