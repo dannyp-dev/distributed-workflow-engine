@@ -20,6 +20,24 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("OK"))
 }
 
+func (a *api) jobHandler(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	job, found := a.store.Get(id)
+
+	if !found {
+		http.Error(w, "Job not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	err := json.NewEncoder(w).Encode(job)
+	if err != nil {
+		log.Printf("Could not encode job response: %v", err)
+	}
+}
+
 func (a *api) jobsHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -95,6 +113,7 @@ func main() {
 	// Makes it so that healthHandler handles requests whose path is /health
 	http.HandleFunc("/health", healthHandler)
 	http.HandleFunc("/jobs", app.jobsHandler)
+	http.HandleFunc("GET /jobs/{id}", app.jobHandler)
 	log.Println("Server starting on port :8080...")
 
 	err := http.ListenAndServe(":8080", nil)

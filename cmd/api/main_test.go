@@ -161,3 +161,63 @@ func newTestAPI() *api {
 		store: jobs.NewStore(),
 	}
 }
+
+func TestJobHandlerReturnsSavedJob(t *testing.T) {
+	app := newTestAPI()
+
+	original := jobs.Job{
+		ID:     "job-1",
+		Type:   "resize_image",
+		Status: jobs.StatusPending,
+	}
+	app.store.Save(original)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /jobs/{id}", app.jobHandler)
+
+	req := httptest.NewRequest(http.MethodGet, "/jobs/job-1", nil)
+	recorder := httptest.NewRecorder()
+
+	mux.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+	}
+
+	if got := recorder.Header().Get("Content-Type"); got != "application/json" {
+		t.Errorf("expected content type %q, got %q", "application/json", got)
+	}
+
+	var returnedJob jobs.Job
+	if err := json.NewDecoder(recorder.Body).Decode(&returnedJob); err != nil {
+		t.Fatalf("could not decode response: %v", err)
+	}
+
+	if returnedJob.ID != original.ID {
+		t.Errorf("expected ID %q, got %q", original.ID, returnedJob.ID)
+	}
+
+	if returnedJob.Type != original.Type {
+		t.Errorf("expected type %q, got %q", original.Type, returnedJob.Type)
+	}
+
+	if returnedJob.Status != original.Status {
+		t.Errorf("expected status %q, got %q", original.Status, returnedJob.Status)
+	}
+}
+
+func TestJobHandlerReturns404ForMissingJob(t *testing.T) {
+	app := newTestAPI()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /jobs/{id}", app.jobHandler)
+
+	req := httptest.NewRequest(http.MethodGet, "/jobs/missing-job", nil)
+	recorder := httptest.NewRecorder()
+
+	mux.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusNotFound {
+		t.Errorf("expected status %d, got %d", http.StatusNotFound, recorder.Code)
+	}
+}
