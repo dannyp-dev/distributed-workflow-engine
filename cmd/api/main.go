@@ -2,12 +2,15 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
+	"distributed-workflow-engine/internal/database"
 	"distributed-workflow-engine/internal/jobs"
 	"encoding/hex"
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -106,6 +109,18 @@ type api struct {
 }
 
 func main() {
+	databaseURL := os.Getenv("DATABASE_URL")
+
+	if databaseURL == "" {
+		log.Fatal("DATABASE_URL is required")
+	}
+
+	pool, err := database.Open(context.Background(), databaseURL)
+	if err != nil {
+		log.Fatalf("could not connect to database: %v", err)
+	}
+	defer pool.Close()
+
 	app := &api{
 		store: jobs.NewStore(), // Give this API instance one shared job store
 	}
@@ -116,7 +131,7 @@ func main() {
 	http.HandleFunc("GET /jobs/{id}", app.jobHandler)
 	log.Println("Server starting on port :8080...")
 
-	err := http.ListenAndServe(":8080", nil)
+	err = http.ListenAndServe(":8080", nil)
 
 	if err != nil {
 		log.Fatal(err)
