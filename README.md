@@ -1,6 +1,6 @@
 # Distributed Workflow Engine
 
-A learning project for building a small distributed job system in Go. This repository is intentionally only a scaffold: it compiles, but the actual engine is yours to design and implement.
+A learning project for building a small distributed job system in Go. The API can create and retrieve jobs, and PostgreSQL provides durable storage for the running server.
 
 ## The eventual architecture
 
@@ -31,7 +31,7 @@ Keeping them separate will eventually let you run one API process and several wo
 |   `-- worker/       # Worker executable
 |-- internal/
 |   |-- jobs/         # Job model and state transitions
-|   |-- database/     # Future persistence layer
+|   |-- database/     # PostgreSQL connection setup
 |   `-- worker/       # Future worker behavior
 |-- migrations/       # Future database migrations
 |-- .vscode/          # Go extension and editor recommendations
@@ -58,16 +58,39 @@ Keeping them separate will eventually let you run one API process and several wo
    go run ./cmd/worker
    ```
 
-There are no external packages, services, environment variables, containers, or databases to configure yet.
+## Local PostgreSQL setup
 
-## First milestone: an in-memory jobs API
+Copy `.env.example` to `.env`, choose a local development password, and start PostgreSQL:
 
-Build these three endpoints in `cmd/api`:
+```powershell
+Copy-Item .env.example .env
+docker compose up -d postgres
+docker compose exec postgres pg_isready -U workflow -d workflow
+```
+
+Apply the database migration:
+
+```powershell
+Get-Content migrations/001_create_jobs.sql | docker compose exec -T postgres psql -U workflow -d workflow
+```
+
+Set `DATABASE_URL` in the terminal that will run the API. Replace `YOUR_PASSWORD` with the password from `.env`:
+
+```powershell
+$env:DATABASE_URL = "postgres://workflow:YOUR_PASSWORD@127.0.0.1:5432/workflow?sslmode=disable"
+go run ./cmd/api
+```
+
+The real API uses `PostgresStore`. Unit tests use the in-memory `Store`, so regular tests do not require PostgreSQL.
+
+## Current API
+
+The API exposes these endpoints:
 
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/health` | Return a simple success response so you know the server is running. |
-| `POST` | `/jobs` | Validate a request, create a job, store it in memory, and return it. |
+| `POST` | `/jobs` | Validate a request, create a job, store it in PostgreSQL, and return it. |
 | `GET` | `/jobs/{id}` | Look up one stored job by ID or return `404`. |
 
 A useful first job shape is:
@@ -82,7 +105,7 @@ A useful first job shape is:
 }
 ```
 
-Suggested order of work:
+The first milestone was completed in this order:
 
 1. Define `Job` and its status values in `internal/jobs`.
 2. Start an HTTP server using Go's standard `net/http` package.
@@ -91,10 +114,24 @@ Suggested order of work:
 5. Add `POST /jobs`, then `GET /jobs/{id}`.
 6. Write handler and store tests with `net/http/httptest`.
 
-You are done with milestone one when you can create a job, fetch the same job, receive `404` for an unknown ID, and run `go test ./...` successfully.
+Jobs created by the running API persist across API restarts because they are stored in PostgreSQL.
 
-## What not to add yet
+## Tests
 
-Avoid PostgreSQL, Redis, Docker, gRPC, retries, heartbeats, dead-letter queues, authentication, and a web UI until the in-memory API works and you can explain every part of it.
+Run the unit tests and race detector without a database:
 
-After milestone one, the next meaningful step is a worker that can claim a pending job without two workers claiming the same one. That problem will naturally motivate a real database and transactions.
+```powershell
+go test ./...
+go test -race ./...
+```
+
+To run the PostgreSQL integration test against a migrated development database:
+
+```powershell
+$env:TEST_DATABASE_URL = $env:DATABASE_URL
+go test ./internal/jobs -run TestPostgresStoreSaveAndGet -v
+```
+
+## Next milestone
+
+The next step is a worker that can safely claim a pending job without two workers claiming the same job. Later milestones will add execution, retries, heartbeats, failed-job handling, and observability.

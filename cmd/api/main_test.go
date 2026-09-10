@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"distributed-workflow-engine/internal/jobs"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -98,9 +100,9 @@ func TestJobsHandlerAcceptsValidJSON(t *testing.T) {
 		t.Fatalf("could not decode response body: %v", err)
 	}
 
-	storedJob, found := app.store.Get(createdJob.ID)
-	if !found {
-		t.Fatal("expected created job to be saved")
+	storedJob, err := app.store.Get(req.Context(), createdJob.ID)
+	if err != nil {
+		t.Fatalf("expected created job to be saved: %v", err)
 	}
 
 	if storedJob.ID != createdJob.ID {
@@ -170,7 +172,9 @@ func TestJobHandlerReturnsSavedJob(t *testing.T) {
 		Type:   "resize_image",
 		Status: jobs.StatusPending,
 	}
-	app.store.Save(original)
+	if err := app.store.Save(context.Background(), original); err != nil {
+		t.Fatalf("could not save test job: %v", err)
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /jobs/{id}", app.jobHandler)
@@ -219,5 +223,35 @@ func TestJobHandlerReturns404ForMissingJob(t *testing.T) {
 
 	if recorder.Code != http.StatusNotFound {
 		t.Errorf("expected status %d, got %d", http.StatusNotFound, recorder.Code)
+	}
+}
+
+type failingStore struct{}
+
+func (failingStore) Save(context.Context, jobs.Job) error {
+	return errors.New("storage unavailable")
+}
+
+func (failingStore) Get(context.Context, string) (jobs.Job, error) {
+	return jobs.Job{}, jobs.ErrJobNotFound
+}
+
+func TestJobsHandlerReturns500WhenSaveFails(t *testing.T) {
+	app := &api{store: failingStore{}}
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/jobs",
+		strings.NewReader(`{"type":"resize_image","payload":{}}`),
+	)
+	recorder := httptest.NewRecorder()
+
+	app.jobsHandler(recorder, req)
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Errorf(
+			"expected status %d, got %d",
+			http.StatusInternalServerError,
+			recorder.Code,
+		)
 	}
 }

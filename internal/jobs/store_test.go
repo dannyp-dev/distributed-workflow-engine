@@ -1,6 +1,10 @@
 package jobs
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"testing"
+)
 
 func TestStoreSaveAndGet(t *testing.T) {
 	store := NewStore()
@@ -11,11 +15,13 @@ func TestStoreSaveAndGet(t *testing.T) {
 		Status: StatusPending,
 	}
 
-	store.Save(original)
+	if err := store.Save(context.Background(), original); err != nil {
+		t.Fatalf("could not save job: %v", err)
+	}
 
-	saved, found := store.Get("job-1")
-	if !found {
-		t.Fatal("expected saved job to be found")
+	saved, err := store.Get(context.Background(), "job-1")
+	if err != nil {
+		t.Fatalf("could not get saved job: %v", err)
 	}
 
 	if saved.ID != original.ID {
@@ -34,8 +40,8 @@ func TestStoreSaveAndGet(t *testing.T) {
 func TestStoreGetMissingJob(t *testing.T) {
 	store := NewStore()
 
-	_, found := store.Get("missing-job")
-	if found {
-		t.Error("expected missing job not to be found")
+	_, err := store.Get(context.Background(), "missing-job")
+	if !errors.Is(err, ErrJobNotFound) {
+		t.Errorf("expected ErrJobNotFound, got %v", err)
 	}
 }

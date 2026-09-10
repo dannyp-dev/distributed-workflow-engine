@@ -8,6 +8,7 @@ import (
 	"distributed-workflow-engine/internal/jobs"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"os"
@@ -26,16 +27,20 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 func (a *api) jobHandler(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
-	job, found := a.store.Get(id)
-
-	if !found {
+	job, err := a.store.Get(r.Context(), id)
+	if errors.Is(err, jobs.ErrJobNotFound) {
 		http.Error(w, "Job not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		log.Printf("could not get job: %v", err)
+		http.Error(w, "Could not get job", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 
-	err := json.NewEncoder(w).Encode(job)
+	err = json.NewEncoder(w).Encode(job)
 	if err != nil {
 		log.Printf("Could not encode job response: %v", err)
 	}
@@ -77,7 +82,12 @@ func (a *api) jobsHandler(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: time.Now().UTC(),
 	}
 
-	a.store.Save(job) // Save the new job in this API instance's shared store.
+	err = a.store.Save(r.Context(), job)
+	if err != nil {
+		log.Printf("could not save job: %v", err)
+		http.Error(w, "Could not save job", http.StatusInternalServerError)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -105,7 +115,7 @@ type createJobRequest struct {
 }
 
 type api struct {
-	store *jobs.Store
+	store jobs.JobStore
 }
 
 func main() {
@@ -122,7 +132,7 @@ func main() {
 	defer pool.Close()
 
 	app := &api{
-		store: jobs.NewStore(), // Give this API instance one shared job store
+		store: jobs.NewPostgresStore(pool),
 	}
 
 	// Makes it so that healthHandler handles requests whose path is /health

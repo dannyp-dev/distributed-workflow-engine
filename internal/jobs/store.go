@@ -1,6 +1,17 @@
 package jobs
 
-import "sync"
+import (
+	"context"
+	"errors"
+	"sync"
+)
+
+var ErrJobNotFound = errors.New("job not found")
+
+type JobStore interface {
+	Save(ctx context.Context, job Job) error
+	Get(ctx context.Context, id string) (Job, error)
+}
 
 type Store struct {
 	mu   sync.RWMutex
@@ -13,15 +24,21 @@ func NewStore() *Store {
 	}
 }
 
-func (s *Store) Save(job Job) {
+func (s *Store) Save(_ context.Context, job Job) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.jobs[job.ID] = job
+	return nil
 }
 
-func (s *Store) Get(id string) (Job, bool) {
+func (s *Store) Get(_ context.Context, id string) (Job, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
 	job, found := s.jobs[id]
-	return job, found
+	if !found {
+		return Job{}, ErrJobNotFound
+	}
+
+	return job, nil
 }
