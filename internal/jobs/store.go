@@ -7,6 +7,8 @@ import (
 )
 
 var ErrJobNotFound = errors.New("job not found")
+var ErrNoPendingJobs = errors.New("no pending jobs")
+var ErrInvalidTransition = errors.New("invalid job state transition")
 
 type JobStore interface {
 	Save(ctx context.Context, job Job) error

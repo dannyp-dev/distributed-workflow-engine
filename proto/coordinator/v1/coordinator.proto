@@ -1,0 +1,78 @@
+syntax = "proto3";
+
+package coordinator.v1;
+
+option go_package = "distributed-workflow-engine/gen/coordinator/v1;coordinatorv1";
+
+service CoordinatorService {
+  rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  rpc StartJob(StartJobRequest) returns (StartJobResponse);
+  rpc CompleteJob(CompleteJobRequest) returns (CompleteJobResponse);
+  rpc FailJob(FailJobRequest) returns (FailJobResponse);
+}
+
+message Job {
+  string id = 1;
+  string type = 2;
+  string payload_json = 3;
+  string status = 4;
+  int32 attempts = 5;
+  int32 max_attempts = 6;
+  string worker_id = 7;
+  string created_at = 8;
+  string started_at = 9;
+  string completed_at = 10;
+  string last_error = 11;
+}
+
+message RegisterWorkerRequest {
+  string worker_id = 1;
+}
+
+message RegisterWorkerResponse {
+  bool accepted = 1;
+}
+
+message HeartbeatRequest {
+  string worker_id = 1;
+  string current_job_id = 2;
+}
+
+message HeartbeatResponse {
+  string server_time = 1;
+}
+
+message StartJobRequest {
+  string job_id = 1;
+  string worker_id = 2;
+  bool reclaimed = 3;
+}
+
+message StartJobResponse {
+  bool accepted = 1;
+  string reason = 2;
+  Job job = 3;
+}
+
+message CompleteJobRequest {
+  string job_id = 1;
+  string worker_id = 2;
+}
+
+message CompleteJobResponse {
+  string status = 1;
+}
+
+message FailJobRequest {
+  string job_id = 1;
+  string worker_id = 2;
+  string error_message = 3;
+}
+
+message FailJobResponse {
+  bool retry = 1;
+  int32 attempts = 2;
+  int32 max_attempts = 3;
+  string status = 4;
+}

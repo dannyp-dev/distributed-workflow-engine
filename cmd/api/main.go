@@ -1,32 +1,44 @@
-// Command api will accept and expose workflow jobs over HTTP.
+// Command api accepts workflow jobs over HTTP and coordinates workers over gRPC.
 package main
 
 import (
 	"context"
 	"crypto/rand"
+	coordinatorv1 "distributed-workflow-engine/gen/coordinator/v1"
+	"distributed-workflow-engine/internal/coordinator"
 	"distributed-workflow-engine/internal/database"
 	"distributed-workflow-engine/internal/jobs"
+	"distributed-workflow-engine/internal/queue"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/health"
+	healthv1 "google.golang.org/grpc/health/grpc_health_v1"
 )
+
+const defaultMaxAttempts = 3
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	w.Write([]byte("OK"))
+	_, _ = w.Write([]byte("OK"))
 }
 
 func (a *api) jobHandler(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-
 	job, err := a.store.Get(r.Context(), id)
 	if errors.Is(err, jobs.ErrJobNotFound) {
 		http.Error(w, "Job not found", http.StatusNotFound)
@@ -39,10 +51,8 @@ func (a *api) jobHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-
-	err = json.NewEncoder(w).Encode(job)
-	if err != nil {
-		log.Printf("Could not encode job response: %v", err)
+	if err := json.NewEncoder(w).Encode(job); err != nil {
+		log.Printf("could not encode job response: %v", err)
 	}
 }
 
@@ -53,18 +63,23 @@ func (a *api) jobsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var input createJobRequest
-
 	decoder := json.NewDecoder(r.Body)
-
-	err := decoder.Decode(&input)
-
-	if err != nil {
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
 
-	if strings.TrimSpace(input.Type) == "" {
+	input.Type = strings.TrimSpace(input.Type)
+	if input.Type == "" {
 		http.Error(w, "Job type is required", http.StatusBadRequest)
+		return
+	}
+	if input.MaxAttempts == 0 {
+		input.MaxAttempts = defaultMaxAttempts
+	}
+	if input.MaxAttempts < 1 || input.MaxAttempts > 10 {
+		http.Error(w, "max_attempts must be between 1 and 10", http.StatusBadRequest)
 		return
 	}
 
@@ -74,77 +89,151 @@ func (a *api) jobsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	now := time.Now().UTC()
 	job := jobs.Job{
-		ID:        id,
-		Type:      strings.TrimSpace(input.Type), // The client will only be allowed to write the data for the TYPE
-		Payload:   input.Payload,                 // and the Payload
-		Status:    jobs.StatusPending,
-		CreatedAt: time.Now().UTC(),
+		ID:          id,
+		Type:        input.Type,
+		Payload:     input.Payload,
+		Status:      jobs.StatusPending,
+		MaxAttempts: input.MaxAttempts,
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 
-	err = a.store.Save(r.Context(), job)
-	if err != nil {
+	if err := a.store.Save(r.Context(), job); err != nil {
 		log.Printf("could not save job: %v", err)
 		http.Error(w, "Could not save job", http.StatusInternalServerError)
+		return
+	}
+	if _, err := a.queue.Enqueue(r.Context(), job.ID); err != nil {
+		log.Printf("job %s was saved but could not be scheduled: %v", job.ID, err)
+		http.Error(w, "Job was saved but could not be scheduled", http.StatusServiceUnavailable)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-
-	err = json.NewEncoder(w).Encode(job)
-	if err != nil {
+	if err := json.NewEncoder(w).Encode(job); err != nil {
 		log.Printf("could not encode job response: %v", err)
 	}
 }
 
 func newJobID() (string, error) {
-	byteSlice := make([]byte, 16)
-	_, err := rand.Read(byteSlice)
-
-	if err != nil {
+	bytes := make([]byte, 16)
+	if _, err := rand.Read(bytes); err != nil {
 		return "", err
 	}
-
-	return hex.EncodeToString(byteSlice), nil
+	return hex.EncodeToString(bytes), nil
 }
 
 type createJobRequest struct {
-	Type    string         `json:"type"`
-	Payload map[string]any `json:"payload"`
+	Type        string         `json:"type"`
+	Payload     map[string]any `json:"payload"`
+	MaxAttempts int            `json:"max_attempts,omitempty"`
+}
+
+type jobQueue interface {
+	Enqueue(ctx context.Context, jobID string) (string, error)
 }
 
 type api struct {
 	store jobs.JobStore
+	queue jobQueue
 }
 
 func main() {
-	databaseURL := os.Getenv("DATABASE_URL")
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
 
+func run() error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
-		log.Fatal("DATABASE_URL is required")
+		return errors.New("DATABASE_URL is required")
 	}
 
-	pool, err := database.Open(context.Background(), databaseURL)
+	pool, err := database.Open(ctx, databaseURL)
 	if err != nil {
-		log.Fatalf("could not connect to database: %v", err)
+		return fmt.Errorf("connect to database: %w", err)
 	}
 	defer pool.Close()
 
-	app := &api{
-		store: jobs.NewPostgresStore(pool),
-	}
-
-	// Makes it so that healthHandler handles requests whose path is /health
-	http.HandleFunc("/health", healthHandler)
-	http.HandleFunc("/jobs", app.jobsHandler)
-	http.HandleFunc("GET /jobs/{id}", app.jobHandler)
-	log.Println("Server starting on port :8080...")
-
-	err = http.ListenAndServe(":8080", nil)
-
+	stream, err := queue.Open(
+		envOrDefault("REDIS_URL", "redis://127.0.0.1:6379/0"),
+		envOrDefault("REDIS_STREAM", "workflow:jobs"),
+		envOrDefault("REDIS_GROUP", "workflow-workers"),
+		"api",
+	)
 	if err != nil {
-		log.Fatal(err)
+		return err
+	}
+	defer stream.Close()
+	if err := stream.Ping(ctx); err != nil {
+		return err
+	}
+	if err := stream.EnsureGroup(ctx); err != nil {
+		return err
 	}
 
+	store := jobs.NewPostgresStore(pool)
+	app := &api{store: store, queue: stream}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /health", healthHandler)
+	mux.HandleFunc("POST /jobs", app.jobsHandler)
+	mux.HandleFunc("GET /jobs/{id}", app.jobHandler)
+	httpServer := &http.Server{
+		Addr:              envOrDefault("HTTP_ADDR", ":8080"),
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	grpcAddress := envOrDefault("GRPC_ADDR", ":9090")
+	grpcListener, err := net.Listen("tcp", grpcAddress)
+	if err != nil {
+		return fmt.Errorf("listen for gRPC: %w", err)
+	}
+	grpcServer := grpc.NewServer()
+	coordinatorv1.RegisterCoordinatorServiceServer(grpcServer, coordinator.NewServer(store))
+	healthServer := health.NewServer()
+	healthv1.RegisterHealthServer(grpcServer, healthServer)
+	healthServer.SetServingStatus("", healthv1.HealthCheckResponse_SERVING)
+
+	errCh := make(chan error, 2)
+	go func() {
+		log.Printf("HTTP API listening on %s", httpServer.Addr)
+		errCh <- httpServer.ListenAndServe()
+	}()
+	go func() {
+		log.Printf("gRPC coordinator listening on %s", grpcAddress)
+		errCh <- grpcServer.Serve(grpcListener)
+	}()
+
+	select {
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		healthServer.SetServingStatus("", healthv1.HealthCheckResponse_NOT_SERVING)
+		grpcServer.GracefulStop()
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("shut down HTTP server: %w", err)
+		}
+		return nil
+	case err := <-errCh:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	}
+}
+
+func envOrDefault(name string, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
+	}
+	return fallback
 }

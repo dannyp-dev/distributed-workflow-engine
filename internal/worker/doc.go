@@ -1,2 +1,2 @@
-// Package worker will contain job-claiming and execution behavior.
+// Package worker implements Redis-backed job consumption, retries, and execution.
 package worker

@@ -136,6 +136,14 @@ func TestJobsHandlerAcceptsValidJSON(t *testing.T) {
 	if createdJob.CreatedAt.IsZero() {
 		t.Error("expected job creation time to be set")
 	}
+	if createdJob.MaxAttempts != defaultMaxAttempts {
+		t.Errorf("expected max attempts %d, got %d", defaultMaxAttempts, createdJob.MaxAttempts)
+	}
+
+	queued := app.queue.(*fakeQueue).jobIDs
+	if len(queued) != 1 || queued[0] != createdJob.ID {
+		t.Errorf("expected job %q to be queued, got %v", createdJob.ID, queued)
+	}
 }
 
 func TestJobsHandlerRejectsMissingType(t *testing.T) {
@@ -158,9 +166,25 @@ func TestJobsHandlerRejectsMissingType(t *testing.T) {
 	}
 }
 
+func TestJobsHandlerRejectsInvalidMaxAttempts(t *testing.T) {
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/jobs",
+		strings.NewReader(`{"type":"noop","payload":{},"max_attempts":11}`),
+	)
+	recorder := httptest.NewRecorder()
+
+	newTestAPI().jobsHandler(recorder, req)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Errorf("expected status %d, got %d", http.StatusBadRequest, recorder.Code)
+	}
+}
+
 func newTestAPI() *api {
 	return &api{
 		store: jobs.NewStore(),
+		queue: &fakeQueue{},
 	}
 }
 
@@ -237,7 +261,7 @@ func (failingStore) Get(context.Context, string) (jobs.Job, error) {
 }
 
 func TestJobsHandlerReturns500WhenSaveFails(t *testing.T) {
-	app := &api{store: failingStore{}}
+	app := &api{store: failingStore{}, queue: &fakeQueue{}}
 	req := httptest.NewRequest(
 		http.MethodPost,
 		"/jobs",
@@ -253,5 +277,37 @@ func TestJobsHandlerReturns500WhenSaveFails(t *testing.T) {
 			http.StatusInternalServerError,
 			recorder.Code,
 		)
+	}
+}
+
+type fakeQueue struct {
+	jobIDs []string
+	err    error
+}
+
+func (q *fakeQueue) Enqueue(_ context.Context, jobID string) (string, error) {
+	if q.err != nil {
+		return "", q.err
+	}
+	q.jobIDs = append(q.jobIDs, jobID)
+	return "1-0", nil
+}
+
+func TestJobsHandlerReturns503WhenQueueFails(t *testing.T) {
+	app := &api{
+		store: jobs.NewStore(),
+		queue: &fakeQueue{err: errors.New("queue unavailable")},
+	}
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/jobs",
+		strings.NewReader(`{"type":"noop","payload":{}}`),
+	)
+	recorder := httptest.NewRecorder()
+
+	app.jobsHandler(recorder, req)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected status %d, got %d", http.StatusServiceUnavailable, recorder.Code)
 	}
 }

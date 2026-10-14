@@ -1,2 +1,2 @@
-// Package database will contain persistence code when the project moves beyond memory storage.
+// Package database opens and verifies PostgreSQL connection pools.
 package database
